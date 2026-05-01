@@ -73,6 +73,8 @@ def chart_daily(data: list[tuple], month: int, year: int) -> bytes:
     for day, cat, amount in data:
         amounts[cat][day] = amount
 
+    day_totals = [sum(amounts[cat].get(d, 0) for cat in categories) for d in all_days]
+
     fig = go.Figure()
     for i, cat in enumerate(categories):
         values = [amounts[cat].get(d, 0) for d in all_days]
@@ -82,6 +84,16 @@ def chart_daily(data: list[tuple], month: int, year: int) -> bytes:
             y=values,
             marker_color=COLORS[i % len(COLORS)],
         ))
+
+    fig.add_trace(go.Scatter(
+        x=all_days,
+        y=day_totals,
+        mode="text",
+        text=[f"{v:,.0f}" for v in day_totals],
+        textposition="top center",
+        textfont=dict(size=11, color="#cdd6f4"),
+        showlegend=False,
+    ))
 
     fig.update_layout(
         barmode="stack",
