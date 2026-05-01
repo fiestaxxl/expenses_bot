@@ -1,5 +1,4 @@
 from calendar import monthrange
-from datetime import date
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from database import Database
@@ -14,7 +13,7 @@ MONTH_NAMES = {
 
 
 async def send_monthly_report(bot: Bot, db: Database):
-    today = date.today()
+    today = config.today()
     if today.month == 1:
         month, year = 12, today.year - 1
     else:

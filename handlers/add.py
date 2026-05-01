@@ -2,8 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.filters import Command
-from datetime import date
+from aiogram.filters import Command, StateFilter
 from database import Database
 from config import config
 from keyboards import MAIN_MENU
@@ -25,7 +24,7 @@ def owner_only(func):
 
 @router.message(Command("add"))
 @router.message(F.text == "➕ Добавить трату")
-@router.message(F.text.regexp(r"^\d+([.,]\d+)?$"))  # bare number triggers add flow
+@router.message(StateFilter(None), F.text.regexp(r"^\d+([.,]\d+)?$"))
 async def cmd_add(message: Message, state: FSMContext, db: Database):
     text = message.text.strip()
 
@@ -87,7 +86,7 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
     await state.update_data(category=category)
     await callback.message.edit_text(f"Категория: <b>{category}</b>", parse_mode="HTML")
 
-    today = date.today().day
+    today = config.today().day
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"Сегодня ({today})", callback_data=f"day:{today}")],
         [InlineKeyboardButton(text="Другой день", callback_data="day:custom")],
@@ -146,7 +145,7 @@ async def process_comment(message: Message, state: FSMContext, db: Database):
 
 async def _save_expense(message: Message, state: FSMContext, db: Database, comment: str | None):
     data = await state.get_data()
-    today = date.today()
+    today = config.today()
     month = today.month
     year = today.year
 

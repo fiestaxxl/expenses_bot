@@ -2,7 +2,6 @@ import io
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.filters import Command
-from datetime import date
 from database import Database
 from config import config
 from keyboards import MAIN_MENU
@@ -19,7 +18,7 @@ MONTH_NAMES = {
 
 
 def report_keyboard():
-    today = date.today()
+    today = config.today()
     m, y = today.month, today.year
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -39,7 +38,7 @@ def report_keyboard():
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, db: Database):
-    today = date.today()
+    today = config.today()
     total = await db.get_monthly_total(today.month, today.year)
     await message.answer(
         f"👋 Привет! Я бот для учёта расходов.\n\n"
@@ -56,7 +55,7 @@ async def cmd_start(message: Message, db: Database):
 @router.message(Command("report"))
 @router.message(F.text == "📊 Отчёты")
 async def cmd_report(message: Message, db: Database):
-    today = date.today()
+    today = config.today()
     total = await db.get_monthly_total(today.month, today.year)
     await message.answer(
         f"<b>Отчёты</b>\n\n"
@@ -88,7 +87,7 @@ async def send_last(message: Message, db: Database):
 async def handle_report(callback: CallbackQuery, db: Database):
     _, kind, m_str, y_str = callback.data.split(":")
     month, year = int(m_str), int(y_str)
-    today = date.today()
+    today = config.today()
 
     await callback.answer("Строю график…")
     await callback.message.answer("⏳ Генерирую...")
