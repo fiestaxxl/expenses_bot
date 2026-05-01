@@ -103,14 +103,14 @@ class Database:
             return (await cursor.fetchone())[0]
 
     async def get_daily_expenses(self, month: int, year: int) -> list[tuple]:
-        """Returns [(day, total), ...] for a given month."""
+        """Returns [(day, category, amount), ...] for a given month."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
-                SELECT day, SUM(amount)
+                SELECT day, category, SUM(amount)
                 FROM expenses
                 WHERE month = ? AND year = ?
-                GROUP BY day
-                ORDER BY day
+                GROUP BY day, category
+                ORDER BY day, category
             """, (month, year))
             return await cursor.fetchall()
 

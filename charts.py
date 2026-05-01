@@ -65,23 +65,30 @@ def chart_monthly_pie(data: list[tuple], month: int, year: int) -> bytes:
 
 
 def chart_daily(data: list[tuple], month: int, year: int) -> bytes:
-    """Bar chart: day vs daily total for a month."""
-    days = [r[0] for r in data]
-    totals = [r[1] for r in data]
+    """Stacked bar chart: day vs daily total, broken down by category."""
+    # pivot: {category: {day: amount}}
+    all_days = sorted({r[0] for r in data})
+    categories = sorted({r[1] for r in data})
+    amounts: dict[str, dict[int, float]] = {cat: {} for cat in categories}
+    for day, cat, amount in data:
+        amounts[cat][day] = amount
 
-    fig = go.Figure(go.Bar(
-        x=days,
-        y=totals,
-        marker_color="#89b4fa",
-        text=[f"{v:,.0f}" for v in totals],
-        textposition="outside",
-        textfont=dict(size=11),
-    ))
+    fig = go.Figure()
+    for i, cat in enumerate(categories):
+        values = [amounts[cat].get(d, 0) for d in all_days]
+        fig.add_trace(go.Bar(
+            name=cat,
+            x=all_days,
+            y=values,
+            marker_color=COLORS[i % len(COLORS)],
+        ))
+
     fig.update_layout(
+        barmode="stack",
         title=dict(text=f"Расходы по дням — {MONTH_NAMES[month]} {year}", font=dict(size=16)),
         xaxis=dict(title="День", tickmode="linear", dtick=1),
         yaxis=dict(title="Сумма", gridcolor="#313244"),
-        showlegend=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     return _fig_to_bytes(fig)
 
