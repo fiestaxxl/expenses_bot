@@ -4,7 +4,8 @@ from datetime import date
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
-load_dotenv()
+# Отдельный инстанс (dev-бот с собственной БД): ENV_FILE=.env.dev python bot.py
+load_dotenv(os.getenv("ENV_FILE", ".env"))
 
 
 @dataclass

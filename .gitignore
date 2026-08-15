@@ -1,4 +1,7 @@
 __pycache__
 .env
+.env.dev
 *.db
 venv
+files/
+.DS_Store
