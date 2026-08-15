@@ -38,6 +38,10 @@ router.message.filter(F.from_user.id == config.OWNER_ID)
 class ImportFlow(StatesGroup):
     waiting_category = State()   # вопросы по незнакомым операциям
     preview = State()            # редактируемое превью перед вставкой
+    preview_field = State()      # ждём текст для суммы/даты/комментария в превью
+
+
+PFX = "impv"  # callback-префикс интерактивного превью
 
 
 async def _own_settings(db: Database) -> dict:
@@ -213,14 +217,24 @@ async def process_answer(callback: CallbackQuery, state: FSMContext, db: Databas
 
 # ── Превью с правкой ─────────────────────────────────────────────────────────
 
-def _preview_keyboard(n: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def _preview_actions(n: int) -> list[list[InlineKeyboardButton]]:
+    return [
         [InlineKeyboardButton(text=f"✅ Импортировать ({n})", callback_data="imp:commit")],
         [InlineKeyboardButton(text="❌ Отменить импорт", callback_data="imp:cancel")],
-    ])
+    ]
 
 
-async def _show_preview(message: Message, state: FSMContext, db: Database):
+def _preview_header(data) -> str:
+    staged = data["staged"]
+    total = f"{sum(e['amount'] for e in staged):,.2f}".replace(",", " ")
+    meta = data["meta"]
+    return (f"<b>Превью: {meta['bank']} {meta['period']}</b> — "
+            f"{len(staged)} трат на {total} ₽\n"
+            f"Проверь список, поправь что нужно и жми «Импортировать».")
+
+
+async def _show_preview(message: Message, state: FSMContext, db: Database,
+                        edit_message: bool = False):
     data = await state.get_data()
     staged = data["staged"]
     staged.sort(key=lambda e: (e["year"], e["month"], e["day"]))
@@ -230,19 +244,104 @@ async def _show_preview(message: Message, state: FSMContext, db: Database):
     if not staged:
         await message.answer(
             "Новых трат в выписке нет — только пропуски. Подтверди, чтобы я их запомнил.",
-            reply_markup=_preview_keyboard(0),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=_preview_actions(0)),
         )
         return
 
-    chunks = editing.render_list(staged)
-    total = f"{sum(e['amount'] for e in staged):,.2f}".replace(",", " ")
-    for chunk in chunks[:-1]:
-        await message.answer(chunk, parse_mode="HTML")
-    await message.answer(
-        chunks[-1] + f"\n\nИтого: <b>{total} ₽</b>\n{editing.HELP}",
-        parse_mode="HTML",
-        reply_markup=_preview_keyboard(len(staged)),
-    )
+    text, kb = editing.page_view(staged, data.get("page", 0), PFX,
+                                 header=_preview_header(data),
+                                 action_rows=_preview_actions(len(staged)))
+    if edit_message:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(ImportFlow.preview, F.data.startswith(f"{PFX}:"))
+async def preview_callback(callback: CallbackQuery, state: FSMContext, db: Database):
+    parts = callback.data.split(":")
+    action = parts[1]
+    data = await state.get_data()
+    staged = data["staged"]
+
+    async def refresh_page(page: int):
+        await state.update_data(page=page)
+        d = await state.get_data()
+        text, kb = editing.page_view(staged, page, PFX, header=_preview_header(d),
+                                     action_rows=_preview_actions(len(staged)))
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+    if action == "page":
+        await refresh_page(int(parts[2]))
+
+    elif action == "open":
+        idx = int(parts[2])
+        if idx >= len(staged):
+            await refresh_page(0)
+        else:
+            text, kb = editing.card_view(staged, idx, PFX)
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+    elif action == "f":
+        field, idx = parts[2], int(parts[3])
+        if field == "category":
+            categories = await db.get_categories()
+            await state.update_data(categories=categories)
+            await callback.message.edit_text(
+                f"Трата {idx + 1}: выбери категорию",
+                reply_markup=editing.category_kb(idx, categories, PFX),
+            )
+        else:
+            await state.set_state(ImportFlow.preview_field)
+            await state.update_data(edit_idx=idx, edit_field=field)
+            await callback.message.answer(editing.FIELD_PROMPTS[field], parse_mode="HTML")
+
+    elif action == "sc":
+        idx, ci = int(parts[2]), int(parts[3])
+        staged[idx]["category"] = data["categories"][ci]
+        await state.update_data(staged=staged)
+        text, kb = editing.card_view(staged, idx, PFX)
+        await callback.message.edit_text("✅ Категория обновлена\n\n" + text,
+                                         parse_mode="HTML", reply_markup=kb)
+
+    elif action == "del":
+        idx = int(parts[2])
+        await callback.message.edit_reply_markup(
+            reply_markup=editing.confirm_del_kb(idx, PFX))
+
+    elif action == "del2":
+        idx = int(parts[2])
+        data["mark"].append(staged[idx]["hash"])  # больше не предлагать эту операцию
+        staged.pop(idx)
+        await state.update_data(staged=staged, mark=data["mark"])
+        await refresh_page(min(idx, max(len(staged) - 1, 0)) // editing.PAGE_SIZE)
+
+    await callback.answer()
+
+
+@router.message(ImportFlow.preview_field, F.text)
+async def preview_field_input(message: Message, state: FSMContext, db: Database):
+    data = await state.get_data()
+    idx, field = data["edit_idx"], data["edit_field"]
+    staged = data["staged"]
+    e = staged[idx]
+
+    value = editing.parse_field_value(field, message.text, e["year"])
+    if isinstance(value, str) and field != "comment":
+        await message.answer(value)
+        return
+
+    if field == "amount":
+        e["amount"] = value
+    elif field == "date":
+        e["day"], e["month"], e["year"] = value
+    else:
+        e["comment"] = value or None
+
+    await state.set_state(ImportFlow.preview)
+    await state.update_data(staged=staged)
+    text, kb = editing.card_view(staged, idx, PFX)
+    await message.answer("✅ Обновил\n\n" + text, parse_mode="HTML", reply_markup=kb)
 
 
 @router.message(ImportFlow.preview, F.text)
@@ -265,20 +364,20 @@ async def preview_edit(message: Message, state: FSMContext, db: Database):
     if cmd.action == "delete":
         data["mark"].append(e["hash"])  # больше не предлагать эту операцию
         staged.pop(cmd.index - 1)
-        note = f"Строка {cmd.index} удалена. Нумерация сдвинулась!"
+        note = f"🗑 Строка {cmd.index} удалена. Нумерация сдвинулась!"
     elif cmd.action == "category":
         e["category"] = cmd.value
-        note = editing.format_row(cmd.index, e)
+        note = "✅ " + editing.format_row(cmd.index, e)
     elif cmd.action == "amount":
         e["amount"] = cmd.value
-        note = editing.format_row(cmd.index, e)
+        note = "✅ " + editing.format_row(cmd.index, e)
     else:
         e["comment"] = cmd.value or None
-        note = editing.format_row(cmd.index, e)
+        note = "✅ " + editing.format_row(cmd.index, e)
 
     await state.update_data(staged=staged, mark=data["mark"])
-    await message.answer(note, parse_mode="HTML",
-                         reply_markup=_preview_keyboard(len(staged)))
+    await message.answer(note, parse_mode="HTML")
+    await _show_preview(message, state, db)
 
 
 @router.callback_query(ImportFlow.preview, F.data == "imp:cancel")

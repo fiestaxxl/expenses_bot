@@ -18,13 +18,13 @@ from dataclasses import dataclass, field
 from datetime import date
 
 # ── Свои реквизиты (настройки, хранятся в таблице settings) ──────────────────
-# own_phones    — последние 10 цифр своих номеров: "9500118891"
-# own_contracts — номера своих договоров Т-Банка
-# own_names     — как банки пишут ваше имя в переводах: "Г. Иван Сергеевич"
-# own_banks     — подстроки банков, переводы в которые считать своими: "Yandex,Яндекс"
+# own_phones   — последние 10 цифр своих номеров: "9500118891"
+# own_accounts — номера своих счетов/договоров в любых банках
+# own_names    — как банки пишут ваше имя в переводах: "Г. Иван Сергеевич"
+# own_banks    — подстроки банков, переводы в которые считать своими: "Yandex,Яндекс"
 # Всё, что уходит на эти реквизиты, считается самопереводом и не попадает в траты.
 
-SELF_KEYS = ("own_phones", "own_contracts", "own_names", "own_banks")
+SELF_KEYS = ("own_phones", "own_accounts", "own_names", "own_banks")
 
 # ── Словарь мерчантов: (regex по описанию, категория, комментарий) ───────────
 # Порядок важен: первое совпадение выигрывает.
@@ -344,9 +344,13 @@ def _is_self(op: Operation, own: dict[str, list[str]]) -> bool:
                  r"Внутрибанковский перевод|Перевод с договора|Внесение наличных|"
                  r"Снятие наличных", d):
         return True
-    m = re.search(r"Внутренний перевод на договор (\d+)", d)
+    # номер своего счёта/договора в описании (любой банк)
+    accounts = own.get("own_accounts", [])
+    m = re.search(r"(?:договор|счет|счёт)[уа]?\s*№?\s*(\d{6,})", d, re.I)
     if m:
-        return m.group(1) in own.get("own_contracts", [])
+        return m.group(1) in accounts
+    if any(a and len(a) >= 6 and a in d for a in accounts):
+        return True
     # «свои» банки — только в контексте перевода, иначе «Yandex» зацепит
     # оплату YANDEX*GO; голое имя банка («Яндекс») — это карточный перевод Сбера
     transfer_ctx = "перевод" in d.lower() or "перевод" in op.sber_category.lower()

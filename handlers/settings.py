@@ -28,10 +28,10 @@ class SettingsFlow(StatesGroup):
 
 
 SETTING_LABELS = {
-    "own_phones": ("📱 Свои телефоны", "последние 10 цифр, через запятую: 9500118891"),
-    "own_names": ("👤 Своё имя в переводах", "как пишут банки, через запятую: Г. Иван Сергеевич"),
+    "own_phones": ("📱 Свои телефоны", "последние 10 цифр, через запятую: 9504567890"),
+    "own_names": ("👤 Своё имя в переводах", "как пишут банки, через запятую: И. Иван Иванович"),
     "own_banks": ("🏦 «Свои» банки", "подстроки, через запятую: Yandex, Яндекс, Альфа"),
-    "own_contracts": ("📄 Свои договоры Т-Банка", "номера через запятую"),
+    "own_accounts": ("📄 Свои счета/договоры", "номера счетов или договоров из выписок любых банков, через запятую"),
     "import_after": ("📅 Граница импорта", "дата ГГГГ-ММ-ДД; операции по неё включительно не импортируются"),
 }
 
@@ -46,6 +46,7 @@ async def _settings_text(db: Database) -> tuple[str, InlineKeyboardMarkup]:
     rules = await db.get_merchant_rules()
     lines.append(f"\n🧠 Выученных правил мерчантов: {len(rules)}")
     buttons.append([InlineKeyboardButton(text="🧠 Правила мерчантов", callback_data="set:rules")])
+    buttons.append([InlineKeyboardButton(text="✖️ Закрыть", callback_data="set:close")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -59,6 +60,17 @@ async def cmd_settings(message: Message, state: FSMContext, db: Database):
 @router.callback_query(F.data.startswith("set:"))
 async def setting_click(callback: CallbackQuery, state: FSMContext, db: Database):
     key = callback.data.split(":", 1)[1]
+    if key == "close":
+        await state.clear()
+        await callback.message.edit_text("Настройки закрыты. Открыть снова: /settings")
+        await callback.answer()
+        return
+    if key == "cancelinput":
+        await state.clear()
+        text, kb = await _settings_text(db)
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        await callback.answer()
+        return
     if key == "rules":
         await _show_rules(callback.message, state, db)
         await callback.answer()
@@ -69,8 +81,11 @@ async def setting_click(callback: CallbackQuery, state: FSMContext, db: Database
     await state.update_data(setting_key=key)
     await callback.message.answer(
         f"{label}\nСейчас: <code>{html.escape(current)}</code>\n\n"
-        f"Пришли новое значение ({hint}).\nОчистить: <code>-</code>, отмена: /cancel",
+        f"Пришли новое значение ({hint}).\nОчистить: <code>-</code>",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✖️ Отмена", callback_data="set:cancelinput")
+        ]]),
     )
     await callback.answer()
 
@@ -117,8 +132,11 @@ async def _show_rules(message: Message, state: FSMContext, db: Database):
     await state.update_data(rules=[r[0] for r in rules])
     await message.answer(
         "<b>Правила мерчантов</b>\n" + "\n".join(lines)
-        + "\n\nУдалить: пришли номер. Закончить: /done",
+        + "\n\nУдалить правило: пришли его номер.",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✖️ Закрыть", callback_data="set:cancelinput")
+        ]]),
     )
 
 

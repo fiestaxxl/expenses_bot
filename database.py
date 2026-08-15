@@ -64,6 +64,12 @@ class Database:
                     value TEXT
                 )
             """)
+            # миграция: own_contracts (только Т-Банк) -> own_accounts (все банки)
+            await db.execute("""
+                INSERT OR IGNORE INTO settings (key, value)
+                SELECT 'own_accounts', value FROM settings WHERE key = 'own_contracts'
+            """)
+            await db.execute("DELETE FROM settings WHERE key = 'own_contracts'")
             # seed default categories if empty
             cursor = await db.execute("SELECT COUNT(*) FROM categories")
             count = (await cursor.fetchone())[0]
@@ -220,7 +226,8 @@ class Database:
             return await cursor.fetchall()
 
     async def update_expense(self, expense_id: int, *, amount: float = None,
-                             category: str = None, comment: str = None) -> bool:
+                             category: str = None, comment: str = None,
+                             day: int = None, month: int = None, year: int = None) -> bool:
         sets, params = [], []
         if amount is not None:
             sets.append("amount = ?"); params.append(amount)
@@ -228,6 +235,9 @@ class Database:
             sets.append("category = ?"); params.append(category)
         if comment is not None:
             sets.append("comment = ?"); params.append(comment or None)
+        for name, value in (("day", day), ("month", month), ("year", year)):
+            if value is not None:
+                sets.append(f"{name} = ?"); params.append(value)
         if not sets:
             return False
         params.append(expense_id)
