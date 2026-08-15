@@ -41,7 +41,37 @@ class ImportFlow(StatesGroup):
     preview_field = State()      # ждём текст для суммы/даты/комментария в превью
 
 
+class SetupFlow(StatesGroup):
+    """Онбординг перед первым импортом: свои реквизиты для фильтра самопереводов."""
+    step = State()
+
+
 PFX = "impv"  # callback-префикс интерактивного превью
+
+# (ключ настройки, заголовок, зачем это нужно / что будет без него, подсказка формата)
+SETUP_STEPS = [
+    ("own_phones", "📱 Твой номер телефона",
+     "Переводы между своими банками в выписках выглядят как обычные переводы "
+     "по номеру телефона. Если я знаю твой номер — молча отброшу их, это не траты.\n"
+     "<i>Пропустишь — буду спрашивать про каждый такой перевод отдельно.</i>",
+     "Пришли номер (или несколько через запятую): +7 950 011-88-91"),
+    ("own_names", "👤 Твоё имя, как его пишут банки",
+     "Банки подписывают переводы сокращённым именем, например "
+     "«Перевод для Г. Иван Сергеевич». Зная его, я отличу перевод самому себе "
+     "от перевода другому человеку.\n"
+     "<i>Пропустишь — такие переводы превратятся в вопросы.</i>",
+     "Пришли как в выписке (можно несколько через запятую): Г. Иван Сергеевич"),
+    ("own_banks", "🏦 Банки, где у тебя есть свои счета",
+     "Если переводишь сам себе, например, в Яндекс Банк — назови такие банки, "
+     "и я не буду считать эти переводы тратами.\n"
+     "<i>Пропустишь — каждый перевод в другой банк станет вопросом.</i>",
+     "Через запятую, как пишут в выписках: Yandex, Яндекс, Альфа"),
+    ("own_accounts", "📄 Номера своих счетов/договоров",
+     "Они видны в шапке каждой выписки. Внутрибанковские переводы между своими "
+     "счетами я тогда отброшу автоматически.\n"
+     "<i>Пропустишь — про них буду спрашивать.</i>",
+     "Номера через запятую: 5312639601, 40817810800028174889"),
+]
 
 
 async def _own_settings(db: Database) -> dict:
@@ -70,14 +100,110 @@ async def handle_document(message: Message, state: FSMContext, db: Database, bot
     os.close(fd)
     await bot.download(doc, destination=path)
 
-    if await state.get_state() in (ImportFlow.waiting_category, ImportFlow.preview):
+    if await state.get_state() in (ImportFlow.waiting_category, ImportFlow.preview,
+                                   ImportFlow.preview_field, SetupFlow.step):
         data = await state.get_data()
         pending = data.get("pending", []) + [(path, doc.file_name or "выписка.pdf")]
         await state.update_data(pending=pending)
         await message.answer(f"📥 Файл в очереди ({len(pending)}). Сначала закончим с текущей выпиской.")
         return
 
-    await _process_file(message, state, db, path, doc.file_name or "выписка.pdf")
+    filename = doc.file_name or "выписка.pdf"
+
+    # первый импорт — сначала короткая настройка
+    if not await _setup_complete(db):
+        await state.set_state(SetupFlow.step)
+        await state.update_data(setup_idx=0, setup_file=path, setup_filename=filename)
+        await message.answer(
+            "👋 Это твоя первая выписка! Прежде чем разобрать её, задам "
+            "4 коротких вопроса.\n\n"
+            "<b>Зачем:</b> в выписках полно переводов самому себе между своими "
+            "банками — это не траты, и я хочу отбрасывать их автоматически. "
+            "Для этого мне нужно знать твои реквизиты.\n\n"
+            "Каждый шаг можно пропустить — импорт всё равно сработает, просто "
+            "я буду чаще переспрашивать. Всё сохраняется только в твоей базе "
+            "и правится потом в /settings.",
+            parse_mode="HTML",
+        )
+        await _setup_ask(message, 0)
+        return
+
+    await _process_file(message, state, db, path, filename)
+
+
+async def _setup_complete(db: Database) -> bool:
+    if await db.get_setting("setup_done") == "1":
+        return True
+    for key, *_ in SETUP_STEPS:
+        if await db.get_setting(key):
+            return True  # реквизиты уже заведены (сидом или руками)
+    return False
+
+
+async def _setup_ask(message: Message, idx: int):
+    key, title, why, hint = SETUP_STEPS[idx]
+    await message.answer(
+        f"<b>Шаг {idx + 1}/{len(SETUP_STEPS)}. {title}</b>\n\n{why}\n\n{hint}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⏭ Пропустить этот шаг", callback_data="setup:skip")
+        ]]),
+    )
+
+
+def _normalize_setup(key: str, text: str) -> str:
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if key == "own_phones":
+        digits = ["".join(ch for ch in p if ch.isdigit())[-10:] for p in parts]
+        parts = [d for d in digits if len(d) == 10]
+    return ", ".join(parts)
+
+
+async def _setup_advance(message: Message, state: FSMContext, db: Database,
+                         value: str | None):
+    """Сохраняет ответ (или пропуск) и двигает визард дальше."""
+    data = await state.get_data()
+    idx = data["setup_idx"]
+    key, title, _, _ = SETUP_STEPS[idx]
+
+    if value:
+        await db.set_setting(key, value)
+        await message.answer(f"✅ Сохранил: <code>{html.escape(value)}</code>",
+                             parse_mode="HTML")
+    else:
+        await message.answer("Ок, пропускаем — про эти переводы я буду спрашивать. "
+                             "Передумаешь — /settings.")
+
+    idx += 1
+    if idx < len(SETUP_STEPS):
+        await state.update_data(setup_idx=idx)
+        await _setup_ask(message, idx)
+        return
+
+    await db.set_setting("setup_done", "1")
+    await message.answer("🎉 Настройка готова! Теперь разберу выписку…")
+    path, filename = data["setup_file"], data["setup_filename"]
+    await state.set_state(None)
+    await _process_file(message, state, db, path, filename)
+
+
+@router.message(SetupFlow.step, F.text, ~F.text.in_(editing.MENU_TEXTS),
+                ~F.text.startswith("/"))
+async def setup_answer(message: Message, state: FSMContext, db: Database):
+    data = await state.get_data()
+    key = SETUP_STEPS[data["setup_idx"]][0]
+    value = _normalize_setup(key, message.text)
+    if not value:
+        await message.answer("Не понял значение — попробуй ещё раз или нажми "
+                             "«Пропустить этот шаг».")
+        return
+    await _setup_advance(message, state, db, value)
+
+
+@router.callback_query(SetupFlow.step, F.data == "setup:skip")
+async def setup_skip(callback: CallbackQuery, state: FSMContext, db: Database):
+    await callback.answer()
+    await _setup_advance(callback.message, state, db, None)
 
 
 @router.message(Command("cancel"))
@@ -85,6 +211,8 @@ async def cmd_cancel(message: Message, state: FSMContext):
     data = await state.get_data()
     for p, _ in data.get("pending", []):
         _rm(p)
+    if data.get("setup_file"):
+        _rm(data["setup_file"])
     await state.clear()
     await message.answer("Ок, отменил.")
 
@@ -272,6 +400,11 @@ async def preview_callback(callback: CallbackQuery, state: FSMContext, db: Datab
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
     if action == "page":
+        if parts[2] == "ask":
+            _, n_pages = editing.clamp_page(len(staged), 0)
+            await callback.answer(f"Пришли номер страницы текстом (1–{n_pages})",
+                                  show_alert=True)
+            return
         await refresh_page(int(parts[2]))
 
     elif action == "open":
@@ -294,7 +427,12 @@ async def preview_callback(callback: CallbackQuery, state: FSMContext, db: Datab
         else:
             await state.set_state(ImportFlow.preview_field)
             await state.update_data(edit_idx=idx, edit_field=field)
-            await callback.message.answer(editing.FIELD_PROMPTS[field], parse_mode="HTML")
+            await callback.message.answer(
+                editing.FIELD_PROMPTS[field], parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✖️ Отмена", callback_data=f"{PFX}:fcancel:{idx}")
+                ]]),
+            )
 
     elif action == "sc":
         idx, ci = int(parts[2]), int(parts[3])
@@ -319,7 +457,18 @@ async def preview_callback(callback: CallbackQuery, state: FSMContext, db: Datab
     await callback.answer()
 
 
-@router.message(ImportFlow.preview_field, F.text)
+@router.callback_query(ImportFlow.preview_field, F.data.startswith(f"{PFX}:fcancel:"))
+async def preview_field_cancel(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    await state.set_state(ImportFlow.preview)
+    text, kb = editing.card_view(data["staged"], idx, PFX)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.message(ImportFlow.preview_field, F.text, ~F.text.in_(editing.MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def preview_field_input(message: Message, state: FSMContext, db: Database):
     data = await state.get_data()
     idx, field = data["edit_idx"], data["edit_field"]
@@ -344,8 +493,17 @@ async def preview_field_input(message: Message, state: FSMContext, db: Database)
     await message.answer("✅ Обновил\n\n" + text, parse_mode="HTML", reply_markup=kb)
 
 
-@router.message(ImportFlow.preview, F.text)
+@router.message(ImportFlow.preview, F.text, ~F.text.in_(editing.MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def preview_edit(message: Message, state: FSMContext, db: Database):
+    # просто число — переход на страницу превью
+    if message.text.strip().isdigit():
+        data = await state.get_data()
+        page, _ = editing.clamp_page(len(data["staged"]), int(message.text) - 1)
+        await state.update_data(page=page)
+        await _show_preview(message, state, db)
+        return
+
     categories = await db.get_categories()
     cmd = editing.parse_edit(message.text, categories)
     if cmd is None:

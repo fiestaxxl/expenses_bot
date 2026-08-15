@@ -1,5 +1,6 @@
 import io
 from aiogram import Router, F
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.filters import Command
 from database import Database
@@ -37,16 +38,25 @@ def report_keyboard():
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, db: Database):
+async def cmd_start(message: Message, db: Database, state: FSMContext):
+    await state.clear()  # /start всегда выводит в главное меню из любого режима
     today = config.today()
     total = await db.get_monthly_total(today.month, today.year)
+    total_str = f"{total:,.0f}".replace(",", " ")
     await message.answer(
-        f"👋 Привет! Я бот для учёта расходов.\n\n"
-        f"<b>Как добавить трату:</b>\n"
-        f"• Нажми кнопку <b>➕ Добавить трату</b> внизу экрана\n"
-        f"• Или просто отправь сумму — например: <code>500</code> или <code>1990.50</code>\n\n"
-        f"Дальше я спрошу категорию, день и комментарий.\n\n"
-        f"<b>Текущий месяц ({MONTH_NAMES[today.month]}):</b> <b>{total:,.0f} ₽</b>",
+        f"👋 Привет! Я веду учёт твоих расходов.\n"
+        f"Потрачено в {MONTH_NAMES[today.month].lower()}е: <b>{total_str} ₽</b>\n\n"
+        f"<b>Что я умею:</b>\n\n"
+        f"💸 <b>Записать трату</b> — просто пришли сумму, например <code>500</code>. "
+        f"Спрошу категорию и день.\n\n"
+        f"📄 <b>Разобрать банковскую выписку</b> — пришли PDF из Сбера, Т-Банка "
+        f"или Яндекс Банка, я сам вытащу траты, раскидаю по категориям и покажу "
+        f"на проверку перед записью.\n\n"
+        f"📋 <b>Показать и поправить траты</b> — кнопка «Траты» внизу: любой "
+        f"период, каждую запись можно изменить или удалить.\n\n"
+        f"📊 <b>Отчёты</b> — графики по категориям, дням и месяцам.\n\n"
+        f"Все команды — в кнопке «Меню» рядом с полем ввода. "
+        f"Ошибся — <code>/undo</code>, застрял — <code>/start</code>.",
         parse_mode="HTML",
         reply_markup=MAIN_MENU,
     )
@@ -54,7 +64,8 @@ async def cmd_start(message: Message, db: Database):
 
 @router.message(Command("report"))
 @router.message(F.text == "📊 Отчёты")
-async def cmd_report(message: Message, db: Database):
+async def cmd_report(message: Message, db: Database, state: FSMContext):
+    await state.clear()
     today = config.today()
     total = await db.get_monthly_total(today.month, today.year)
     await message.answer(
@@ -67,7 +78,8 @@ async def cmd_report(message: Message, db: Database):
 
 
 @router.message(Command("last"))
-async def cmd_last(message: Message, db: Database):
+async def cmd_last(message: Message, db: Database, state: FSMContext):
+    await state.clear()
     await send_last(message, db)
 
 

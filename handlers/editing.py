@@ -15,7 +15,11 @@ import re
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 MAX_MSG = 3500  # запас до телеграмного лимита 4096
-PAGE_SIZE = 10
+PAGE_SIZE = 20
+
+# Кнопки главного меню: режимы правки пропускают их насквозь,
+# чтобы из любого места можно было выйти в меню
+MENU_TEXTS = {"➕ Добавить трату", "📋 Траты", "📊 Отчёты", "⚙️ Категории"}
 
 HELP = (
     "Нажми на номер траты под списком, чтобы её поправить.\n"
@@ -136,11 +140,13 @@ def page_view(entries: list[dict], page: int, prefix: str,
     if n_pages > 1:
         nav = []
         if page > 0:
-            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:page:{page - 1}"))
+            nav.append(InlineKeyboardButton(text="⏮", callback_data=f"{prefix}:page:0"))
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{prefix}:page:{page - 1}"))
         nav.append(InlineKeyboardButton(text=f"стр. {page + 1}/{n_pages}",
-                                        callback_data=f"{prefix}:page:{page}"))
+                                        callback_data=f"{prefix}:page:ask"))
         if page < n_pages - 1:
-            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:page:{page + 1}"))
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{prefix}:page:{page + 1}"))
+            nav.append(InlineKeyboardButton(text="⏭", callback_data=f"{prefix}:page:{n_pages - 1}"))
         rows.append(nav)
     rows.extend(action_rows or [])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)

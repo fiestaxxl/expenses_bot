@@ -2,7 +2,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, MenuButtonCommands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from config import config
@@ -17,16 +17,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_COMMANDS = [
-    BotCommand(command="start", description="Главное меню"),
-    BotCommand(command="add", description="Добавить трату"),
-    BotCommand(command="report", description="Отчёты"),
-    BotCommand(command="categories", description="Управление категориями"),
-    BotCommand(command="last", description="Последние 10 трат"),
-    BotCommand(command="list", description="Траты за период (с правкой)"),
-    BotCommand(command="imports", description="Импорты выписок и их отмена"),
-    BotCommand(command="settings", description="Настройки импорта выписок"),
-    BotCommand(command="undo", description="Отменить последнюю трату"),
-    BotCommand(command="cancel", description="Прервать текущее действие"),
+    BotCommand(command="start", description="🏠 Главное меню и справка"),
+    BotCommand(command="add", description="➕ Добавить трату"),
+    BotCommand(command="list", description="📋 Траты за период — посмотреть и поправить"),
+    BotCommand(command="report", description="📊 Отчёты и графики"),
+    BotCommand(command="last", description="🕐 Последние 10 трат"),
+    BotCommand(command="categories", description="⚙️ Категории: добавить/переименовать"),
+    BotCommand(command="imports", description="📄 Импорты выписок — история и отмена"),
+    BotCommand(command="settings", description="🔧 Настройки импорта выписок"),
+    BotCommand(command="undo", description="↩️ Отменить последнюю трату"),
+    BotCommand(command="cancel", description="✖️ Прервать текущее действие"),
 ]
 
 
@@ -47,6 +47,8 @@ async def main():
     dp.include_router(reports.router)
 
     await bot.set_my_commands(BOT_COMMANDS)
+    # постоянная кнопка «Меню» слева от поля ввода — со всеми командами
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(

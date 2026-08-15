@@ -38,6 +38,7 @@ _PERIOD_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Этот месяц", callback_data="lstp:this"),
      InlineKeyboardButton(text="Прошлый месяц", callback_data="lstp:prev")],
     [InlineKeyboardButton(text="Последние 7 дней", callback_data="lstp:7d")],
+    [InlineKeyboardButton(text="✖️ В меню", callback_data="lstp:close")],
 ])
 
 
@@ -58,6 +59,11 @@ async def cmd_list(message: Message, state: FSMContext):
 async def period_button(callback: CallbackQuery, state: FSMContext, db: Database):
     today = config.today()
     kind = callback.data.split(":")[1]
+    if kind == "close":
+        await state.clear()
+        await callback.message.edit_text("Ок. Главное меню внизу 👇")
+        await callback.answer()
+        return
     if kind == "this":
         d1, d2 = today.replace(day=1), today
     elif kind == "prev":
@@ -90,7 +96,8 @@ def _parse_period(text: str, today: date) -> tuple[date, date] | None:
     return (d1, d2) if d1 <= d2 else (d2, d1)
 
 
-@router.message(ListFlow.waiting_period, F.text)
+@router.message(ListFlow.waiting_period, F.text, ~F.text.in_(editing.MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def period_text(message: Message, state: FSMContext, db: Database):
     period = _parse_period(message.text, config.today())
     if not period:
@@ -125,10 +132,13 @@ def _header(data) -> str:
     return f"<b>{data['header']}</b> — {len(entries)} шт., {total} ₽"
 
 
+_CLOSE_ROW = [[InlineKeyboardButton(text="✖️ Закрыть", callback_data=f"{PFX}:close")]]
+
+
 async def _send_page(message: Message, state: FSMContext, new_message: bool = False):
     data = await state.get_data()
     text, kb = editing.page_view(data["entries"], data.get("page", 0), PFX,
-                                 header=_header(data))
+                                 header=_header(data), action_rows=_CLOSE_ROW)
     if new_message:
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
     else:
@@ -146,10 +156,23 @@ async def browse_callback(callback: CallbackQuery, state: FSMContext, db: Databa
 
     async def refresh_page(page: int):
         await state.update_data(page=page)
-        text, kb = editing.page_view(entries, page, PFX, header=_header(await state.get_data()))
+        text, kb = editing.page_view(entries, page, PFX,
+                                     header=_header(await state.get_data()),
+                                     action_rows=_CLOSE_ROW)
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
+    if action == "close":
+        await state.clear()
+        await callback.message.edit_text("Ок, закончили. Главное меню внизу 👇")
+        await callback.answer()
+        return
+
     if action == "page":
+        if parts[2] == "ask":
+            _, n_pages = editing.clamp_page(len(entries), 0)
+            await callback.answer(f"Пришли номер страницы текстом (1–{n_pages})",
+                                  show_alert=True)
+            return
         await refresh_page(int(parts[2]))
 
     elif action == "open":
@@ -172,7 +195,12 @@ async def browse_callback(callback: CallbackQuery, state: FSMContext, db: Databa
         else:
             await state.set_state(ListFlow.waiting_field)
             await state.update_data(edit_idx=idx, edit_field=field)
-            await callback.message.answer(editing.FIELD_PROMPTS[field], parse_mode="HTML")
+            await callback.message.answer(
+                editing.FIELD_PROMPTS[field], parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✖️ Отмена", callback_data=f"{PFX}:fcancel:{idx}")
+                ]]),
+            )
 
     elif action == "sc":
         idx, ci = int(parts[2]), int(parts[3])
@@ -203,7 +231,18 @@ async def browse_callback(callback: CallbackQuery, state: FSMContext, db: Databa
     await callback.answer()
 
 
-@router.message(ListFlow.waiting_field, F.text)
+@router.callback_query(ListFlow.waiting_field, F.data.startswith(f"{PFX}:fcancel:"))
+async def field_cancel(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    await state.set_state(ListFlow.browsing)
+    text, kb = editing.card_view(data["entries"], idx, PFX)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.message(ListFlow.waiting_field, F.text, ~F.text.in_(editing.MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def field_input(message: Message, state: FSMContext, db: Database):
     data = await state.get_data()
     idx, field = data["edit_idx"], data["edit_field"]
@@ -239,8 +278,17 @@ async def browsing_done(message: Message, state: FSMContext):
     await message.answer("Ок, закончили с правками.")
 
 
-@router.message(ListFlow.browsing, F.text)
+@router.message(ListFlow.browsing, F.text, ~F.text.in_(editing.MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def browsing_edit(message: Message, state: FSMContext, db: Database):
+    # просто число — переход на страницу
+    if message.text.strip().isdigit():
+        data = await state.get_data()
+        page, _ = editing.clamp_page(len(data["entries"]), int(message.text) - 1)
+        await state.update_data(page=page)
+        await _send_page(message, state, new_message=True)
+        return
+
     categories = await db.get_categories()
     cmd = editing.parse_edit(message.text, categories)
     if cmd is None:

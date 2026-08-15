@@ -1,7 +1,14 @@
+"""Графики отчётов. Единый стиль: светлая тема, минимализм в духе Apple Health.
+
+Правила:
+- один акцентный цвет там, где категории подписаны на оси (bar-чарты);
+- категориальная палитра (валидированная, фикс. порядок) там, где цвет несёт
+  смысл: доли и стек по дням; больше 8 серий — сворачиваются в «Другое»;
+- подписи значений — вторичным цветом текста, не цветом серии;
+- лёгкая горизонтальная сетка, без осевых линий и рамок.
+"""
+
 import plotly.graph_objects as go
-import plotly.express as px
-import io
-import calendar
 
 MONTH_NAMES = {
     1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
@@ -9,132 +16,188 @@ MONTH_NAMES = {
     9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"
 }
 
-COLORS = px.colors.qualitative.Set2
+# категориальная палитра (фиксированный порядок, валидирована для светлой темы)
+PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+           "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+ACCENT = PALETTE[0]            # единственный цвет для «одноцветных» графиков
+SURFACE = "#fcfcfb"
+INK = "#0b0b0b"                # основной текст
+INK2 = "#52514e"               # вторичный текст (подписи значений, оси)
+GRID = "#ebebe9"
+FONT = "Helvetica Neue, Helvetica, Arial, sans-serif"
+MAX_SERIES = 8                 # дальше — «Другое»
 
 
-def _fig_to_bytes(fig) -> bytes:
+def _rub(v: float) -> str:
+    return f"{v:,.0f}".replace(",", " ")
+
+
+def _base_layout(fig, title: str, subtitle: str = ""):
+    text = f"<b>{title}</b>"
+    if subtitle:
+        text += f"<br><span style='font-size:13px;color:{INK2}'>{subtitle}</span>"
     fig.update_layout(
-        paper_bgcolor="#1e1e2e",
-        plot_bgcolor="#1e1e2e",
-        font=dict(color="#cdd6f4", family="Arial", size=13),
-        margin=dict(l=40, r=40, t=60, b=40),
+        title=dict(text=text, x=0.045, xanchor="left", y=0.94, yanchor="top",
+                   font=dict(size=20, color=INK)),
+        paper_bgcolor=SURFACE,
+        plot_bgcolor=SURFACE,
+        font=dict(color=INK, family=FONT, size=13),
+        margin=dict(l=48, r=36, t=86, b=44),
+        xaxis=dict(showgrid=False, zeroline=False, showline=False,
+                   tickfont=dict(color=INK2, size=12), title=None),
+        yaxis=dict(gridcolor=GRID, gridwidth=1, zeroline=False, showline=False,
+                   tickfont=dict(color=INK2, size=12), title=None),
+        showlegend=False,
     )
-    return fig.to_image(format="png", width=900, height=500, scale=2)
+
+
+def _fig_to_bytes(fig, height: int = 500) -> bytes:
+    return fig.to_image(format="png", width=900, height=height, scale=2)
+
+
+def _fold_other(data: list[tuple], key_idx: int, val_idx: int) -> dict[str, float]:
+    """Суммы по категориям; всё после MAX_SERIES-1 крупнейших -> «Другое»."""
+    totals: dict[str, float] = {}
+    for row in data:
+        totals[row[key_idx]] = totals.get(row[key_idx], 0) + row[val_idx]
+    ranked = sorted(totals, key=totals.get, reverse=True)
+    keep = set(ranked[:MAX_SERIES - 1]) if len(ranked) > MAX_SERIES else set(ranked)
+    return {cat: (cat if cat in keep else "Другое") for cat in totals}
 
 
 def chart_monthly_by_category(data: list[tuple], month: int, year: int) -> bytes:
-    """Bar chart: category vs total for a given month."""
+    """Bar chart: категория × сумма за месяц. Один цвет — имена уже на оси."""
     categories = [r[0] for r in data]
     totals = [r[1] for r in data]
 
     fig = go.Figure(go.Bar(
         x=categories,
         y=totals,
-        marker_color=COLORS[:len(categories)],
-        text=[f"{v:,.0f} ₽" for v in totals],
+        marker=dict(color=ACCENT),
+        text=[f"{_rub(v)}" for v in totals],
         textposition="outside",
-        textfont=dict(size=12),
+        textfont=dict(size=12, color=INK2),
+        cliponaxis=False,
     ))
-    fig.update_layout(
-        title=dict(text=f"Расходы по категориям — {MONTH_NAMES[month]} {year}", font=dict(size=16)),
-        xaxis_title="Категория",
-        yaxis_title="Сумма",
-        yaxis=dict(gridcolor="#313244"),
-        showlegend=False,
-    )
+    _base_layout(fig, "Расходы по категориям",
+                 f"{MONTH_NAMES[month]} {year} · итого {_rub(sum(totals))} ₽")
+    fig.update_layout(barcornerradius=6, bargap=0.42)
+    fig.update_yaxes(tickformat="~s")
     return _fig_to_bytes(fig)
 
 
 def chart_monthly_pie(data: list[tuple], month: int, year: int) -> bytes:
-    """Pie chart: category shares for a month."""
-    categories = [r[0] for r in data]
-    totals = [r[1] for r in data]
+    """Donut: доли категорий за месяц, топ-7 + «Другое»."""
+    mapping = _fold_other(data, 0, 1)
+    totals: dict[str, float] = {}
+    for cat, value in data:
+        totals[mapping[cat]] = totals.get(mapping[cat], 0) + value
+    items = sorted(totals.items(), key=lambda x: -x[1])
+    if "Другое" in totals:  # «Другое» всегда последним
+        items = [i for i in items if i[0] != "Другое"] + [("Другое", totals["Другое"])]
+    labels = [i[0] for i in items]
+    values = [i[1] for i in items]
 
     fig = go.Figure(go.Pie(
-        labels=categories,
-        values=totals,
-        hole=0.4,
-        marker=dict(colors=COLORS),
+        labels=labels,
+        values=values,
+        hole=0.62,
+        sort=False,
+        direction="clockwise",
+        marker=dict(colors=PALETTE[:len(labels)],
+                    line=dict(color=SURFACE, width=2)),
         textinfo="label+percent",
-        textfont=dict(size=13),
+        textposition="outside",
+        textfont=dict(size=13, color=INK),
     ))
-    fig.update_layout(
-        title=dict(text=f"Доли категорий — {MONTH_NAMES[month]} {year}", font=dict(size=16)),
+    fig.add_annotation(
+        text=f"<b>{_rub(sum(values))} ₽</b><br>"
+             f"<span style='font-size:13px;color:{INK2}'>итого</span>",
+        showarrow=False, font=dict(size=22, color=INK, family=FONT),
     )
-    return _fig_to_bytes(fig)
+    _base_layout(fig, "Доли категорий", f"{MONTH_NAMES[month]} {year}")
+    fig.update_layout(margin=dict(l=80, r=80, t=90, b=60))
+    return _fig_to_bytes(fig, height=560)
 
 
 def chart_daily(data: list[tuple], month: int, year: int) -> bytes:
-    """Stacked bar chart: day vs daily total, broken down by category."""
-    # pivot: {category: {day: amount}}
+    """Stacked bar: день × сумма, разбивка по категориям (топ-7 + «Другое»)."""
+    mapping = _fold_other(data, 1, 2)
     all_days = sorted({r[0] for r in data})
-    categories = sorted({r[1] for r in data})
-    amounts: dict[str, dict[int, float]] = {cat: {} for cat in categories}
+    amounts: dict[str, dict[int, float]] = {}
+    order_totals: dict[str, float] = {}
     for day, cat, amount in data:
-        amounts[cat][day] = amount
+        folded = mapping[cat]
+        amounts.setdefault(folded, {})
+        amounts[folded][day] = amounts[folded].get(day, 0) + amount
+        order_totals[folded] = order_totals.get(folded, 0) + amount
 
-    day_totals = [sum(amounts[cat].get(d, 0) for cat in categories) for d in all_days]
+    series = sorted(order_totals, key=order_totals.get, reverse=True)
+    if "Другое" in series:
+        series = [s for s in series if s != "Другое"] + ["Другое"]
+
+    day_totals = [sum(amounts[s].get(d, 0) for s in series) for d in all_days]
 
     fig = go.Figure()
-    for i, cat in enumerate(categories):
-        values = [amounts[cat].get(d, 0) for d in all_days]
+    for i, cat in enumerate(series):
         fig.add_trace(go.Bar(
             name=cat,
             x=all_days,
-            y=values,
-            marker_color=COLORS[i % len(COLORS)],
+            y=[amounts[cat].get(d, 0) for d in all_days],
+            marker=dict(color=PALETTE[i % len(PALETTE)],
+                        line=dict(color=SURFACE, width=1)),
         ))
-
     fig.add_trace(go.Scatter(
         x=all_days,
         y=day_totals,
         mode="text",
-        text=[f"{v:,.0f}" for v in day_totals],
+        text=[_rub(v) if v else "" for v in day_totals],
         textposition="top center",
-        textfont=dict(size=11, color="#cdd6f4"),
+        textfont=dict(size=10, color=INK2),
         showlegend=False,
+        cliponaxis=False,
     ))
-
+    _base_layout(fig, "Расходы по дням",
+                 f"{MONTH_NAMES[month]} {year} · итого {_rub(sum(day_totals))} ₽")
     fig.update_layout(
         barmode="stack",
-        title=dict(text=f"Расходы по дням — {MONTH_NAMES[month]} {year}", font=dict(size=16)),
-        xaxis=dict(title="День", tickmode="linear", dtick=1),
-        yaxis=dict(title="Сумма", gridcolor="#313244"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        barcornerradius=3,
+        bargap=0.35,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
+                    font=dict(size=12, color=INK2), bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(tickmode="linear", dtick=1, tickfont=dict(size=10, color=INK2)),
     )
-    return _fig_to_bytes(fig)
+    fig.update_yaxes(tickformat="~s")
+    return _fig_to_bytes(fig, height=520)
 
 
 def chart_yearly_trend(data: list[tuple], year: int) -> bytes:
-    """Line chart: monthly totals trend for a year."""
+    """Line: суммы по месяцам за год."""
     months = [r[0] for r in data]
     totals = [r[1] for r in data]
-    month_labels = [MONTH_NAMES[m] for m in months]
+    month_labels = [MONTH_NAMES[m][:3] for m in months]
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
+    fig = go.Figure(go.Scatter(
         x=month_labels,
         y=totals,
         mode="lines+markers+text",
-        line=dict(color="#cba6f7", width=3),
-        marker=dict(size=10, color="#cba6f7"),
-        text=[f"{v:,.0f}" for v in totals],
+        line=dict(color=ACCENT, width=2.5, shape="spline", smoothing=0.6),
+        marker=dict(size=8, color=ACCENT, line=dict(color=SURFACE, width=2)),
+        text=[_rub(v) for v in totals],
         textposition="top center",
-        textfont=dict(size=11),
+        textfont=dict(size=11, color=INK2),
         fill="tozeroy",
-        fillcolor="rgba(203,166,247,0.15)",
+        fillcolor="rgba(42,120,214,0.07)",
+        cliponaxis=False,
     ))
-    fig.update_layout(
-        title=dict(text=f"Тренд расходов по месяцам — {year}", font=dict(size=16)),
-        xaxis_title="Месяц",
-        yaxis=dict(title="Сумма", gridcolor="#313244"),
-        showlegend=False,
-    )
+    _base_layout(fig, "Тренд по месяцам", f"{year} год")
+    fig.update_yaxes(tickformat="~s", rangemode="tozero")
     return _fig_to_bytes(fig)
 
 
 def chart_alltime_by_category(data: list[tuple]) -> bytes:
-    """Horizontal bar: all-time totals by category."""
+    """Horizontal bar: суммы по категориям за всё время."""
     categories = [r[0] for r in data][::-1]
     totals = [r[1] for r in data][::-1]
 
@@ -142,16 +205,15 @@ def chart_alltime_by_category(data: list[tuple]) -> bytes:
         x=totals,
         y=categories,
         orientation="h",
-        marker_color=COLORS[:len(categories)],
-        text=[f"{v:,.0f} ₽" for v in totals],
+        marker=dict(color=ACCENT),
+        text=[f"{_rub(v)} ₽" for v in totals],
         textposition="outside",
-        textfont=dict(size=12),
+        textfont=dict(size=12, color=INK2),
+        cliponaxis=False,
     ))
-    fig.update_layout(
-        title=dict(text="Все расходы по категориям (за всё время)", font=dict(size=16)),
-        xaxis=dict(title="Сумма", gridcolor="#313244"),
-        yaxis_title="Категория",
-        showlegend=False,
-        height=max(400, len(categories) * 55),
-    )
-    return _fig_to_bytes(fig)
+    _base_layout(fig, "За всё время", f"итого {_rub(sum(totals))} ₽")
+    fig.update_layout(barcornerradius=5, bargap=0.38,
+                      margin=dict(l=140, r=90, t=86, b=44))
+    fig.update_xaxes(tickformat="~s", gridcolor=GRID, showgrid=True)
+    fig.update_yaxes(showgrid=False, tickfont=dict(color=INK, size=13))
+    return _fig_to_bytes(fig, height=max(420, len(categories) * 48 + 120))

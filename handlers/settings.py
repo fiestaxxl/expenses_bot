@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from config import config
 from database import Database
+from handlers.editing import MENU_TEXTS
 
 router = Router()
 router.message.filter(F.from_user.id == config.OWNER_ID)
@@ -96,7 +97,8 @@ async def value_cancel(message: Message, state: FSMContext):
     await message.answer("Ок, не меняю.")
 
 
-@router.message(SettingsFlow.waiting_value, F.text)
+@router.message(SettingsFlow.waiting_value, F.text, ~F.text.in_(MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def value_set(message: Message, state: FSMContext, db: Database):
     data = await state.get_data()
     key = data["setting_key"]
@@ -146,7 +148,8 @@ async def rules_done(message: Message, state: FSMContext):
     await message.answer("Ок.")
 
 
-@router.message(SettingsFlow.manage_rules, F.text)
+@router.message(SettingsFlow.manage_rules, F.text, ~F.text.in_(MENU_TEXTS),
+                ~F.text.startswith("/"))
 async def rules_delete(message: Message, state: FSMContext, db: Database):
     data = await state.get_data()
     patterns = data["rules"]
