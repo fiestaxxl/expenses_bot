@@ -7,7 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from config import config
 from database import Database
-from handlers import add, reports, categories, import_statement, expense_list, settings
+from handlers import add, reports, categories, import_statement, expense_list, settings, budgets
 from handlers.scheduler import send_monthly_report
 
 logging.basicConfig(
@@ -20,6 +20,7 @@ BOT_COMMANDS = [
     BotCommand(command="start", description="🏠 Главное меню и справка"),
     BotCommand(command="add", description="➕ Добавить трату"),
     BotCommand(command="list", description="📋 Траты за период — посмотреть и поправить"),
+    BotCommand(command="limits", description="💰 Лимиты месяца — остатки по категориям"),
     BotCommand(command="report", description="📊 Отчёты и графики"),
     BotCommand(command="last", description="🕐 Последние 10 трат"),
     BotCommand(command="categories", description="⚙️ Категории: добавить/переименовать"),
@@ -41,6 +42,7 @@ async def main():
 
     dp.include_router(import_statement.router)
     dp.include_router(expense_list.router)
+    dp.include_router(budgets.router)
     dp.include_router(settings.router)
     dp.include_router(categories.router)
     dp.include_router(add.router)

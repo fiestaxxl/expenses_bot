@@ -573,6 +573,11 @@ async def preview_commit(callback: CallbackQuery, state: FSMContext, db: Databas
         text = (f"✅ Импорт #{import_id}: добавлено <b>{added}</b> трат "
                 f"на <b>{total_sum} ₽</b>:\n" + "\n".join(lines)
                 + "\n\nОтменить можно в /imports")
+        from handlers.budgets import budget_summary_for
+        today = config.today()
+        summary = await budget_summary_for(db, set(totals), today.month, today.year)
+        if summary:
+            text += "\n\n<b>Лимиты месяца:</b>\n" + summary
     else:
         text = "Готово, новых трат не добавлено."
     await callback.message.edit_text(text, parse_mode="HTML")

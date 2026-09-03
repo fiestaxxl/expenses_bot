@@ -159,11 +159,15 @@ async def _save_expense(message: Message, state: FSMContext, db: Database, comme
     )
     await state.clear()
 
+    from handlers.budgets import budget_note
+    note = await budget_note(db, data["category"], month, year)
+
     comment_str = f" · {comment}" if comment else ""
     await message.answer(
         f"✅ <b>{data['amount']:,.0f} ₽</b> — {data['category']}"
-        f", {data['day']}.{month:02d}.{year}{comment_str}\n\n"
-        f"Отправь следующую сумму или используй меню.",
+        f", {data['day']}.{month:02d}.{year}{comment_str}"
+        + (f"\n\n{note}" if note else "")
+        + "\n\nОтправь следующую сумму или используй меню.",
         parse_mode="HTML",
         reply_markup=MAIN_MENU,
     )

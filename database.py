@@ -64,6 +64,16 @@ class Database:
                     value TEXT
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS budgets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    month INTEGER NOT NULL,
+                    year INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    UNIQUE(category, month, year)
+                )
+            """)
             # миграция: own_contracts (только Т-Банк) -> own_accounts (все банки)
             await db.execute("""
                 INSERT OR IGNORE INTO settings (key, value)
@@ -253,6 +263,56 @@ class Database:
             cursor = await db.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
             await db.commit()
             return cursor.rowcount > 0
+
+    # ── Лимиты (бюджеты по категориям на месяц) ─────────────────────────────
+    # category = имя категории или спец-строка "Резерв"
+
+    async def get_budgets(self, month: int, year: int) -> dict[str, float]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT category, amount FROM budgets WHERE month = ? AND year = ?",
+                (month, year),
+            )
+            return {r[0]: r[1] for r in await cursor.fetchall()}
+
+    async def set_budget(self, category: str, month: int, year: int, amount: float):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO budgets (category, month, year, amount) VALUES (?,?,?,?) "
+                "ON CONFLICT(category, month, year) DO UPDATE SET amount=excluded.amount",
+                (category, month, year, amount),
+            )
+            await db.commit()
+
+    async def delete_budget(self, category: str, month: int, year: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM budgets WHERE category = ? AND month = ? AND year = ?",
+                (category, month, year),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def copy_budgets(self, from_month: int, from_year: int,
+                           to_month: int, to_year: int) -> int:
+        """Переносит лимиты месяца (существующие в целевом месяце не трогает)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                INSERT OR IGNORE INTO budgets (category, month, year, amount)
+                SELECT category, ?, ?, amount FROM budgets
+                WHERE month = ? AND year = ?
+            """, (to_month, to_year, from_month, from_year))
+            await db.commit()
+            return cursor.rowcount
+
+    async def get_spent(self, category: str, month: int, year: int) -> float:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM expenses "
+                "WHERE category = ? AND month = ? AND year = ?",
+                (category, month, year),
+            )
+            return (await cursor.fetchone())[0]
 
     # ── Импорт выписок ───────────────────────────────────────────────────────
 
